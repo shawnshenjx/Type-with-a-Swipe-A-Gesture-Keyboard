@@ -12,11 +12,39 @@ import statistics
 
 app = Flask(__name__)
 
-# Centroids of 26 keys
+# chars = [
+#     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+#     'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
+#     't', 'u', 'v', 'w', 'x', 'y', 'z'
+# ]
+#
+# # Centroids of 26 keys
+# centroids_X = [50, 205, 135, 120, 100, 155, 190, 225, 275, 260, 295, 330, 275, 240, 310, 345, 30, 135, 85, 170, 240,
+#                170, 65, 100, 205, 65]
+# centroids_Y = [85, 120, 120, 85, 50, 85, 85, 85, 50, 85, 85, 85, 120, 120, 50, 50, 50, 50, 85, 50, 50, 120, 50, 120, 50,
+#                120]
+
+chars = [
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+    'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
+    't', 'u', 'v', 'w', 'x', 'y', 'z', ' '
+]
+
+# Centroids of 27 keys including the space bar
 centroids_X = [50, 205, 135, 120, 100, 155, 190, 225, 275, 260, 295, 330, 275, 240, 310, 345, 30, 135, 85, 170, 240,
-               170, 65, 100, 205, 65]
+               170, 65, 100, 205, 65, 205]  # Adjusted the X-coordinate for the space bar
 centroids_Y = [85, 120, 120, 85, 50, 85, 85, 85, 50, 85, 85, 85, 120, 120, 50, 50, 50, 50, 85, 50, 50, 120, 50, 120, 50,
-               120]
+               120,15]  # Adjusted the Y-coordinate for the space bar
+
+
+# Initialize an empty dictionary to store the key locations
+key_locations = {}
+
+# Iterate through the characters and centroids to populate the key_locations dictionary
+for i, char in enumerate(chars):
+    x, y = centroids_X[i], centroids_Y[i]  # get the coordinates for the current character
+    key_locations[char.upper()] = [x, y]  # store the coordinates in the dictionary with the uppercase character as the key
+
 
 # Pre-process the dictionary and get templates of 10000 words
 words, probabilities = [], {}
@@ -340,60 +368,167 @@ def init():
     return render_template('index.html')
 
 
+def get_char_sequence2(trajectory, key_locations, tolerance, key_list):
+    trajectory_np = np.array(trajectory)
+    key_locations_np = np.array(key_locations)
+
+    # Calculate the distances between all points in trajectory and all key locations
+    diff = trajectory_np[:, np.newaxis, :] - key_locations_np
+    distances = np.linalg.norm(diff, axis=2)
+
+    # Identify the closest key indices for each trajectory point
+    closest_key_indices = np.argmin(distances, axis=1)
+
+    # Filter out distances beyond tolerance
+    mask_within_tolerance = distances[np.arange(distances.shape[0]), closest_key_indices] <= tolerance
+    filtered_closest_keys = closest_key_indices[mask_within_tolerance]
+
+    # Remove consecutive duplicates
+    unique_filtered_keys = np.concatenate(([filtered_closest_keys[0]], filtered_closest_keys[1:][filtered_closest_keys[1:] != filtered_closest_keys[:-1]]))
+
+    sequence = [key_list[idx] for idx in unique_filtered_keys]
+    return ''.join(sequence)
+import time
+import openai
+
+def decode_phrases(char_sequence):
+    best_words = []
+    print(char_sequence)
+
+    for i in range(3):
+        completion = openai.ChatCompletion.create(
+            model="ft:gpt-3.5-turbo-0613:department-of-engineering-university-of-cambridge-cambridge-united-kingdom::8CssovaW",
+            messages=[
+                {'role': "system", 'content': '''You are a phrase decoder which decodes a character sequence into a phrase. Here is the keyboard:
+                                    ```
+                                     Q W E R T Y U I O P
+                                      A S D F G H J K L
+                                       Z X C V B N M
+                                    ```
+                                     The character sequence is generated from the swipe typing trajectory on the keyboard of the phrase.
+                                     Only output the decoded phrase.
+                                     '''},
+                {'role': 'user', 'content': char_sequence}
+            ]
+        )
+
+
+        best_word = completion.choices[0].message["content"]
+        best_words.append(best_word)
+
+    return best_words
+
 @app.route('/shark2', methods=['POST'])
 def shark2():
+
+    openai.api_key = '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'  # replace with your actual API key
+
     start_time = time.time()
     data = json.loads(request.get_data())
+
+    key_list = list(key_locations.keys())
+    locations = list(key_locations.values())
+
+    tolerance = 100  # Set a tolerance value as per your requirements
 
     gesture_points_X = []
     gesture_points_Y = []
     for i in range(len(data)):
         gesture_points_X.append(data[i]['x'])
         gesture_points_Y.append(data[i]['y'])
-
-    gesture_sample_points_X, gesture_sample_points_Y = generate_sample_points(gesture_points_X, gesture_points_Y)
-
-    valid_words, valid_template_sample_points_X, valid_template_sample_points_Y = do_pruning(gesture_points_X,
-                                                                                             gesture_points_Y,
-                                                                                             template_sample_points_X,
-                                                                                             template_sample_points_Y)
-    temp_ux = copy.deepcopy(gesture_sample_points_X)
-    temp_uy = copy.deepcopy(gesture_sample_points_Y)
-    temp_tempx = copy.deepcopy(valid_template_sample_points_X)
-    temp_tempy = copy.deepcopy(valid_template_sample_points_Y)
-    # print()
-    # print("----------------List of Valid Words-----------")
-    # print(valid_words)
-    # print("----------------------------------------------")
-    # print()
-    if not valid_words:
-        end_time = time.time()
-        return '{"best_word":"' + 'No such word in dictionary!! Please try again...' + '", "elapsed_time":"' + str(
-            round((end_time - start_time) * 1000, 5)) + 'ms"}'
-
-    shape_scores = get_shape_scores(temp_ux, temp_uy, temp_tempx, temp_tempy)
-    # print()
-    # print("----------------List of Shape Scores-----------")
-    # print(shape_scores)
-    # print("----------------------------------------------")
-    # print()
-    location_scores = get_location_scores(gesture_sample_points_X, gesture_sample_points_Y,
-                                          valid_template_sample_points_X, valid_template_sample_points_Y)
-    # print()
-    # print("----------------List of Location Scores-----------")
-    # print(location_scores)
-    # print("----------------------------------------------")
-    # print()
-    integration_scores = get_integration_scores(shape_scores, location_scores)
-    # print()
-    # print("----------------List of Integration Scores-----------")
-    # print(integration_scores)
-    # print("----------------------------------------------")
-    # print()
-    best_word, suggestion = get_best_word(valid_words, integration_scores)
+    trajectory = list(zip(gesture_points_X, gesture_points_Y))
+    start_time = time.time()
+    char_sequence2 = get_char_sequence2(trajectory, locations, tolerance, key_list)
     end_time = time.time()
+
+    # completion = openai.ChatCompletion.create(
+    #     model="ft:gpt-3.5-turbo-0613:department-of-engineering-university-of-cambridge-cambridge-united-kingdom::8Cg65EuO",
+    #     messages=[{'role': 'system',
+    #                'content': 'You are a phrase decoder which decode a character sequence into a phrase. \n                                     The caracter sequence is generated from the swipe typing trajectory of the phrase.'},
+    #               {'role': 'user', 'content': char_sequence2}]
+    # )
+
+    # completion = openai.ChatCompletion.create(
+    #     model="ft:gpt-3.5-turbo-0613:department-of-engineering-university-of-cambridge-cambridge-united-kingdom::8Chr0o4P",
+    #     messages=[{'role':"system","content":'''You are a phrase decoder which decodes a character sequence into a phrase. Here is the keyboard:
+    #                                 ```
+    #                                  Q W E R T Y U I O P
+    #                                   A S D F G H J K L
+    #                                    Z X C V B N M
+    #                                 ```
+    #                                  The character sequence is generated from the swipe typing trajectory on the keyboard of the phrase.
+    #                                  Only output the decoded phrase.
+    #                                  '''},
+    #               {'role': 'user', 'content': char_sequence2}]
+    # )
+    #
+    # best_word = completion.choices[0].message["content"]
+    # end_time = time.time()
+    # suggestion = char_sequence2
+
+    phrase_list = decode_phrases(char_sequence2)
+    best_word = phrase_list[0]
+    suggestion = '/n'.join(phrase_list[1:])
+
+    # return char_sequence2
+
     return '{"best_word":"' + best_word + ' (Time elapsed: ' + '", "elapsed_time":"' + str(
         round((end_time - start_time) * 1000, 2)) + 'ms)   Other suggestions: ' + suggestion + '"}'
+
+# @app.route('/shark2', methods=['POST'])
+# def shark2():
+#     start_time = time.time()
+#     data = json.loads(request.get_data())
+#
+#     gesture_points_X = []
+#     gesture_points_Y = []
+#     for i in range(len(data)):
+#         gesture_points_X.append(data[i]['x'])
+#         gesture_points_Y.append(data[i]['y'])
+#
+#     gesture_sample_points_X, gesture_sample_points_Y = generate_sample_points(gesture_points_X, gesture_points_Y)
+#
+#     valid_words, valid_template_sample_points_X, valid_template_sample_points_Y = do_pruning(gesture_points_X,
+#                                                                                              gesture_points_Y,
+#                                                                                              template_sample_points_X,
+#                                                                                              template_sample_points_Y)
+#     temp_ux = copy.deepcopy(gesture_sample_points_X)
+#     temp_uy = copy.deepcopy(gesture_sample_points_Y)
+#     temp_tempx = copy.deepcopy(valid_template_sample_points_X)
+#     temp_tempy = copy.deepcopy(valid_template_sample_points_Y)
+#     # print()
+#     # print("----------------List of Valid Words-----------")
+#     # print(valid_words)
+#     # print("----------------------------------------------")
+#     # print()
+#     if not valid_words:
+#         end_time = time.time()
+#         return '{"best_word":"' + 'No such word in dictionary!! Please try again...' + '", "elapsed_time":"' + str(
+#             round((end_time - start_time) * 1000, 5)) + 'ms"}'
+#
+#     shape_scores = get_shape_scores(temp_ux, temp_uy, temp_tempx, temp_tempy)
+#     # print()
+#     # print("----------------List of Shape Scores-----------")
+#     # print(shape_scores)
+#     # print("----------------------------------------------")
+#     # print()
+#     location_scores = get_location_scores(gesture_sample_points_X, gesture_sample_points_Y,
+#                                           valid_template_sample_points_X, valid_template_sample_points_Y)
+#     # print()
+#     # print("----------------List of Location Scores-----------")
+#     # print(location_scores)
+#     # print("----------------------------------------------")
+#     # print()
+#     integration_scores = get_integration_scores(shape_scores, location_scores)
+#     # print()
+#     # print("----------------List of Integration Scores-----------")
+#     # print(integration_scores)
+#     # print("----------------------------------------------")
+#     # print()
+#     best_word, suggestion = get_best_word(valid_words, integration_scores)
+#     end_time = time.time()
+#     return '{"best_word":"' + best_word + ' (Time elapsed: ' + '", "elapsed_time":"' + str(
+#         round((end_time - start_time) * 1000, 2)) + 'ms)   Other suggestions: ' + suggestion + '"}'
 
 
 if __name__ == "__main__":
